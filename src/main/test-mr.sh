@@ -61,7 +61,6 @@ rm -f mr-*
 
 failed_any=0
 
-exit 1
 #########################################################
 # first word-count
 
@@ -210,7 +209,7 @@ fi
 
 wait
 
-#########################################################
+########################################################
 # test whether any worker or coordinator exits before the
 # task has completed (i.e., all output files have been finalized)
 rm -f mr-*

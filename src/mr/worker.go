@@ -77,13 +77,13 @@ func handleMap(reply *RequestTaskReply) (ret *FinishTaskArgs) {
 }
 
 func handleReduce(reply *RequestTaskReply) (ret *FinishTaskArgs) {
+	deleteFiles := make([]string, 0)
 	ret = new(FinishTaskArgs)
 	ret.IsMap = false
 	ret.WorkerID = workerID
 	// create nReduce encoders
 	intermediate := []KeyValue{}
 	for _, filename := range reply.FileName {
-		fmt.Println(filename)
 		file, err := os.Open(filename)
 		if err != nil {
 			log.Fatalf("cannot open %v", filename)
@@ -97,7 +97,7 @@ func handleReduce(reply *RequestTaskReply) (ret *FinishTaskArgs) {
 			intermediate = append(intermediate, kv)
 		}
 		file.Close()
-		os.Remove(filename)
+		deleteFiles = append(deleteFiles, filename)
 	}
 
 	sort.Sort(ByKey(intermediate))
@@ -124,9 +124,10 @@ func handleReduce(reply *RequestTaskReply) (ret *FinishTaskArgs) {
 	}
 
 	ofile.Close()
-
+	for _, v := range deleteFiles {
+		os.Remove(v)
+	}
 	return ret
-
 }
 
 // main/mrworker.go calls this function.
@@ -141,6 +142,13 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducefun = reducef
 	for {
 		reply := CallRequest()
+		if reply.Finished {
+			break
+		}
+		if len(reply.FileName) == 0 {
+			time.Sleep(time.Second)
+			continue
+		}
 		var finishArgs *FinishTaskArgs
 		switch {
 		case reply.Postpone:

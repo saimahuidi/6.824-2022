@@ -41,6 +41,30 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 	reply.Y = args.X + 1
 	return nil
 }
+func (c *Coordinator) checkTimeout() {
+	for tmp := c.notFinished.Front(); tmp != nil; {
+		next := tmp.Next()
+		current := time.Now()
+		task := tmp.Value.(Task)
+		previous := task.time
+		diff := current.Sub(previous).Seconds()
+		if diff < 10 {
+			break
+		}
+		workerID := task.workerID
+		for _, v := range task.filenames {
+			if c.mapDone {
+				c.reduceWork.PushBack(v)
+			} else {
+				c.mapWork.PushBack(v)
+			}
+		}
+		c.notFinished.Remove(tmp)
+		delete(c.workerTaskMap, workerID)
+		tmp = next
+	}
+
+}
 
 // the method through which the worker request task
 func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *RequestTaskReply) error {
@@ -54,6 +78,7 @@ func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *RequestTaskReply
 		c.nWorkers++
 	}
 	reply.WorkerID = workerID
+	c.checkTimeout()
 	switch {
 	// there is remain map to do
 	case c.mapWork.Len() > 0:
@@ -83,7 +108,11 @@ func (c *Coordinator) RequestTask(args *RequestTaskArgs, reply *RequestTaskReply
 			}
 			tmp = next
 		}
+		c.notFinished.PushBack(Task{reply.FileName, time.Now(), workerID})
+		c.workerTaskMap[workerID] = c.notFinished.Back()
 		reply.NReduce = Y
+	case c.notFinished.Len() > 0:
+		reply.Finished = false
 	default:
 		reply.Finished = true
 	}

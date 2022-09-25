@@ -1,0 +1,37 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // for the documentation about the tasks.json format
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "before_mrsequential",
+            "type": "shell",
+            "command": "bash ${cwd}/src/main/build_mr.sh",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "group": "none"
+        
+        },
+        {
+            "label": "before_lab1",
+            "type": "shell",
+            "command": "bash ${cwd}/src/main/build_lab1.sh",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "group": "none"
+        
+        },
+    ]
+}

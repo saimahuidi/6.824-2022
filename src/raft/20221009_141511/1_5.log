@@ -1,0 +1,72 @@
+Test (2C): basic persistence ...
+007853 TIMR S0 election timeout
+007854 VOTE S0 begin vote currentTerm=1
+007861 VOTE S2 agree to vote S0 and turn into follower because currentTerm=0 < Term=1
+007864 VOTE S1 agree to vote S0 and turn into follower because currentTerm=0 < Term=1
+007864 VOTE S0 Vote succeeds, currentTerm=1
+007998 TIMR S2 follower's normal check
+008040 TIMR S0 send heartbeats
+008040 LEAD S0 send AppendEntries to S2
+008040 LEAD S0 send AppendEntries to S1
+008041 INFO S2 receive appendEntries currentTerm=1
+008042 LEAD S0 succeed in sending AppendEntries to S2
+008042 INFO S1 receive appendEntries currentTerm=1
+008043 LEAD S0 succeed in sending AppendEntries to S1
+008081 CLNT S0 Receive command
+009050 TIMR S0 send heartbeats
+009050 LEAD S0 send AppendEntries to S2
+009050 LEAD S0 send AppendEntries to S1
+009052 INFO S1 receive appendEntries currentTerm=1
+009052 TRCE S1 follower has append 1 entries to its logs
+009053 INFO S2 receive appendEntries currentTerm=1
+009053 TRCE S2 follower has append 1 entries to its logs
+009053 LEAD S0 succeed in sending AppendEntries to S1
+009053 LEAD S0 succeed in sending AppendEntries to S2
+009101 CMIT S0 commit entries to 1
+009101 CLNT S0 apply logentry index=1
+009752 TIMR S1 follower's normal check
+010051 TIMR S0 send heartbeats
+010051 LEAD S0 send AppendEntries to S2
+010052 LEAD S0 send AppendEntries to S1
+010053 INFO S2 receive appendEntries currentTerm=1
+010053 INFO S1 receive appendEntries currentTerm=1
+010053 LEAD S0 succeed in sending AppendEntries to S2
+010054 LEAD S0 succeed in sending AppendEntries to S1
+010123 CLNT S1 apply logentry index=1
+010123 CLNT S2 apply logentry index=1
+011058 TIMR S0 send heartbeats
+011058 LEAD S0 send AppendEntries to S2
+011058 LEAD S0 send AppendEntries to S1
+016071 TIMR S2 follower's normal check
+016082 TIMR S1 follower's normal check
+017235 TIMR S0 election timeout
+017236 VOTE S0 begin vote currentTerm=1
+017237 VOTE S1 agree to vote S0 and turn into follower because currentTerm=0 < Term=1
+017237 VOTE S2 agree to vote S0 and turn into follower because currentTerm=0 < Term=1
+017237 VOTE S0 Vote succeeds, currentTerm=1
+017378 TIMR S0 send heartbeats
+017379 LEAD S0 send AppendEntries to S2
+017379 LEAD S0 send AppendEntries to S1
+017379 INFO S2 receive appendEntries currentTerm=1
+017380 INFO S1 receive appendEntries currentTerm=1
+017380 LEAD S0 succeed in sending AppendEntries to S2
+017380 LEAD S0 succeed in sending AppendEntries to S1
+017411 CLNT S0 Receive command
+018190 TIMR S2 follower's normal check
+018381 TIMR S0 send heartbeats
+018381 LEAD S0 send AppendEntries to S2
+018381 LEAD S0 send AppendEntries to S1
+018382 INFO S2 receive appendEntries currentTerm=1
+018382 TRCE S2 follower has append 1 entries to its logs
+018382 INFO S1 receive appendEntries currentTerm=1
+018383 TRCE S1 follower has append 1 entries to its logs
+018383 LEAD S0 succeed in sending AppendEntries to S2
+018383 LEAD S0 succeed in sending AppendEntries to S1
+018433 CMIT S0 commit entries to 1
+018433 CLNT S0 apply logentry index=1
+0: log map[1:11]; server map[1:11]
+0: log map[1:11]; server map[1:11]
+0: log map[1:11]; server map[1:11]
+apply error: commit index=1 server=0 12 != server=2 11
+exit status 1
+FAIL	6.824/raft	1.845s

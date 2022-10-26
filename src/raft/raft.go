@@ -116,6 +116,8 @@ type Raft struct {
 
 	// to communicate with the client
 	applych chan ApplyMsg
+	// to inform append
+	startch chan struct{}
 }
 
 const RaftElectionTimeoutAct = 1000 * time.Millisecond
@@ -132,6 +134,15 @@ func (rf *Raft) GetState() (int, bool) {
 	isleader = rf.state == leader
 	rf.rwMu.RUnlock()
 	return term, isleader
+}
+
+func (rf *Raft) GetLeader() int {
+
+	currentLeader := 0
+	rf.rwMu.RLock()
+	currentLeader = rf.leaderId
+	rf.rwMu.RUnlock()
+	return currentLeader
 }
 
 // save Raft's persistent state to stable storage,
@@ -777,6 +788,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.persist()
 	rf.logs = rf.logsTemp[:]
 	index := rf.lastLogIndex
+	// send the new start
+	go func() {
+		rf.startch <- struct{}{}
+	}()
 	return index, term, true
 }
 
@@ -837,7 +852,11 @@ func (rf *Raft) heartbeats() {
 		// time.Sleep().
 
 		// sleep
-		time.Sleep(heartbeatsTimeout)
+		select {
+		case <-rf.startch:
+			Debug(dLeader, "S%d send new start\n", rf.me)
+		case <-time.After(heartbeatsTimeout):
+		}
 
 		rf.rwMu.Lock()
 		// if the leader lose its position, close heartbeats
@@ -969,6 +988,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// Volatile state on leaders
 	rf.nextIndex = make([]int, rf.serversNum)
 	rf.matchIndex = make([]int, rf.serversNum)
+	rf.startch = make(chan struct{})
 
 	rf.state = follower
 	// initialize from state persisted before a crash

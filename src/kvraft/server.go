@@ -1,9 +1,11 @@
 package kvraft
 
 import (
+	"bytes"
 	"log"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 
 	"6.824/labgob"
 	"6.824/labrpc"
@@ -33,43 +35,69 @@ type KVServer struct {
 	applyCh chan raft.ApplyMsg
 	dead    int32 // set by Kill()
 
-	currentIndex int
-	maxraftstate int // snapshot if log grows this big
+	currentIndex   int
+	maxraftstate   int // snapshot if log grows this big
+	receiveLogSize int
+	persister      *raft.Persister
 
 	// the kv database
-	dataMu   sync.RWMutex
-	dataBase map[string]string
+	dataBaseMu sync.Mutex
+	dataBase   map[string]string
 
 	// the info of each client
-	mapMu         sync.RWMutex
-	clientInfoMap map[int32]*clientInfo
+	mapMu             sync.RWMutex
+	clientInfoMap     map[int32]*clientInfo
+	clientInfoLockMap map[int32]*clientInfoLock
+
+	// to control snapshotcheck
+	snapshotMu sync.Mutex
 }
 
 type clientInfo struct {
-	rwMu              sync.RWMutex
-	cond              sync.Cond
-	nextCommandId     int32
-	nextCommandSubmit bool
-	lastReply         string
+	NextCommandId int32
+	LastReply     string
 }
 
-func (kv *KVServer) GetClientInfo(clientId int32) *clientInfo {
+type clientInfoLock struct {
+	RwMu sync.RWMutex
+	Cond sync.Cond
+}
+
+type ReadMapCondition struct {
+	rwMu *sync.RWMutex
+}
+
+func (rM *ReadMapCondition) Lock() {
+	rM.rwMu.RLock()
+}
+
+func (rM *ReadMapCondition) Unlock() {
+	rM.rwMu.RUnlock()
+}
+
+func (kv *KVServer) GetClientInfo(clientId int32) (*clientInfo, *clientInfoLock) {
 	// if the client first comes
 	kv.mapMu.RLock()
-	thisClientInfo, ok := kv.clientInfoMap[clientId]
+	thisClientInfo, ok1 := kv.clientInfoMap[clientId]
+	thisClientInfoLock, ok2 := kv.clientInfoLockMap[clientId]
 	kv.mapMu.RUnlock()
-	if !ok {
+	if !ok1 || !ok2 {
 		kv.mapMu.Lock()
-		thisClientInfo, ok = kv.clientInfoMap[clientId]
-		if !ok {
+		thisClientInfo, ok1 = kv.clientInfoMap[clientId]
+		thisClientInfoLock, ok2 = kv.clientInfoLockMap[clientId]
+		if !ok1 {
 			thisClientInfo = new(clientInfo)
-			thisClientInfo.nextCommandId = 0
-			thisClientInfo.cond.L = &sync.Mutex{}
+			thisClientInfo.NextCommandId = 0
 			kv.clientInfoMap[clientId] = thisClientInfo
+		}
+		if !ok2 {
+			thisClientInfoLock = new(clientInfoLock)
+			thisClientInfoLock.Cond.L = &ReadMapCondition{&thisClientInfoLock.RwMu}
+			kv.clientInfoLockMap[clientId] = thisClientInfoLock
 		}
 		kv.mapMu.Unlock()
 	}
-	return thisClientInfo
+	return thisClientInfo, thisClientInfoLock
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
@@ -82,45 +110,40 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	DeBug(dLeader, "S%d receive Get ClientId = %d CommandId = %d Key = %s\n", kv.me, args.ClientId, args.CommandID, args.Key)
 	clientId := args.ClientId
 	commandId := args.CommandID
-	clientInfoT := kv.GetClientInfo(clientId)
-	clientInfoT.rwMu.Lock()
-	nextCommand := clientInfoT.nextCommandId
+	clientInfoT, clientInfoLockT := kv.GetClientInfo(clientId)
+	clientInfoLockT.RwMu.RLock()
+	nextCommand := clientInfoT.NextCommandId
 	// avoid twice excute
 	if commandId == nextCommand-1 {
 		reply.Err = OK
-		reply.Value = clientInfoT.lastReply
-		clientInfoT.rwMu.Unlock()
+		reply.Value = clientInfoT.LastReply
+		clientInfoLockT.RwMu.RUnlock()
 		return
 	}
 	// receive stale RPC call
 	if commandId < nextCommand-1 {
 		reply.Err = ErrRepeat
-		clientInfoT.rwMu.Unlock()
+		clientInfoLockT.RwMu.RUnlock()
 		return
 	}
-	if !clientInfoT.nextCommandSubmit {
-		operation := Op{clientId, commandId, "Get", args.Key, ""}
-		kv.rf.Start(operation)
-		clientInfoT.nextCommandSubmit = true
-	}
-	clientInfoT.rwMu.Unlock()
+	operation := Op{clientId, commandId, "Get", args.Key, ""}
+	kv.rf.Start(operation)
+	DeBug(dLeader, "S%d start %v\n", kv.me, operation)
+	clientInfoLockT.RwMu.RUnlock()
 	// wait for the apply
-	clientInfoT.cond.L.Lock()
-	defer clientInfoT.cond.L.Unlock()
+	clientInfoLockT.Cond.L.Lock()
+	defer clientInfoLockT.Cond.L.Unlock()
 	for !kv.killed() {
-		clientInfoT.rwMu.RLock()
-		if commandId < clientInfoT.nextCommandId {
-			if commandId == clientInfoT.nextCommandId-1 {
+		if commandId < clientInfoT.NextCommandId {
+			if commandId == clientInfoT.NextCommandId-1 {
 				reply.Err = OK
-				reply.Value = clientInfoT.lastReply
+				reply.Value = clientInfoT.LastReply
 			} else {
 				reply.Err = ErrRepeat
 			}
-			clientInfoT.rwMu.RUnlock()
 			return
 		}
-		clientInfoT.rwMu.RUnlock()
-		clientInfoT.cond.Wait()
+		clientInfoLockT.Cond.Wait()
 	}
 }
 
@@ -134,44 +157,56 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	DeBug(dLeader, "S%d receive %s ClientId = %d CommandId = %d Key = %s value = %s\n", kv.me, args.Op, args.ClientId, args.CommandID, args.Key, args.Value)
 	clientId := args.ClientId
 	commandId := args.CommandID
-	clientInfoT := kv.GetClientInfo(clientId)
-	clientInfoT.rwMu.Lock()
-	nextCommand := clientInfoT.nextCommandId
+	clientInfoT, clientInfoLockT := kv.GetClientInfo(clientId)
+	clientInfoLockT.RwMu.RLock()
+	nextCommand := clientInfoT.NextCommandId
 	// avoid twice excute
 	if commandId == nextCommand-1 {
 		reply.Err = OK
-		clientInfoT.rwMu.Unlock()
+		clientInfoLockT.RwMu.RUnlock()
 		return
 	}
 	// receive stale RPC call
 	if commandId < nextCommand-1 {
 		reply.Err = ErrRepeat
-		clientInfoT.rwMu.Unlock()
+		clientInfoLockT.RwMu.RUnlock()
 		return
 	}
-	if !clientInfoT.nextCommandSubmit {
-		operation := Op{clientId, commandId, args.Op, args.Key, args.Value}
-		kv.rf.Start(operation)
-		clientInfoT.nextCommandSubmit = true
-	}
-	clientInfoT.rwMu.Unlock()
+	operation := Op{clientId, commandId, args.Op, args.Key, args.Value}
+	kv.rf.Start(operation)
+	DeBug(dLeader, "S%d start %v\n", kv.me, operation)
+	clientInfoLockT.RwMu.RUnlock()
 	// wait for the apply
-	clientInfoT.cond.L.Lock()
-	defer clientInfoT.cond.L.Unlock()
+	clientInfoLockT.Cond.L.Lock()
+	defer clientInfoLockT.Cond.L.Unlock()
 	for !kv.killed() {
-		clientInfoT.rwMu.RLock()
-		if commandId < clientInfoT.nextCommandId {
-			if commandId == clientInfoT.nextCommandId-1 {
+		if commandId < clientInfoT.NextCommandId {
+			if commandId == clientInfoT.NextCommandId-1 {
 				reply.Err = OK
 			} else {
 				reply.Err = ErrRepeat
 			}
-			clientInfoT.rwMu.RUnlock()
 			return
 		}
-		clientInfoT.rwMu.RUnlock()
-		clientInfoT.cond.Wait()
+		clientInfoLockT.Cond.Wait()
 	}
+}
+
+func (kv *KVServer) checkSnapshot() {
+	// if there is no need to snapshot
+	if kv.maxraftstate == -1 || kv.receiveLogSize < kv.maxraftstate {
+		return
+	}
+	kv.receiveLogSize = 0
+	kv.mapMu.RLock()
+	kv.snapshotMu.Lock()
+	defer kv.mapMu.RUnlock()
+	defer kv.snapshotMu.Unlock()
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+	e.Encode(kv.dataBase)
+	e.Encode(kv.clientInfoMap)
+	kv.rf.Snapshot(kv.currentIndex, w.Bytes())
 }
 
 // the tester calls Kill() when a KVServer instance won't
@@ -200,8 +235,9 @@ func (kv *KVServer) applyCheaker() {
 			return
 		}
 		if receiveMessage.CommandValid {
-			// DeBug(dInfo, "S%d receive apply log %d\n", kv.me, receiveMessage.CommandIndex)
+			// DeBug(dInfo, "S%d receive apply log %v\n", kv.me, receiveMessage.Command)
 			kv.handleApplyLog(&receiveMessage)
+			kv.receiveLogSize += int(unsafe.Sizeof(receiveMessage))
 		} else if receiveMessage.SnapshotValid {
 			kv.handleSnapshot(&receiveMessage)
 		} else {
@@ -212,9 +248,8 @@ func (kv *KVServer) applyCheaker() {
 
 func (kv *KVServer) handleApplyLog(receiveMessage *raft.ApplyMsg) {
 	if receiveMessage.CommandIndex != kv.currentIndex+1 {
-		panic("the order of apply index is wrong!\n")
+		return
 	}
-	kv.currentIndex = receiveMessage.CommandIndex
 	var operation Op = receiveMessage.Command.(Op)
 	// get the content
 	clientId := operation.ClientId
@@ -223,35 +258,53 @@ func (kv *KVServer) handleApplyLog(receiveMessage *raft.ApplyMsg) {
 	op := operation.Operation
 	value := operation.Value
 	// DeBug(dInfo, "S%d receive apply clientId = %d commandId = %d key = %s op = %s value = %s\n", kv.me, clientId, commandId, key, op, value)
-	clientInfoT := kv.GetClientInfo(clientId)
-	clientInfoT.rwMu.Lock()
-	kv.dataMu.Lock()
-	defer clientInfoT.rwMu.Unlock()
-	defer kv.dataMu.Unlock()
-
-	// check the whether the id match to avoid twice excute
-	if clientInfoT.nextCommandId != commandId {
-		panic("the order of apply index is wrong\n")
+	clientInfoT, clientInfoLockT := kv.GetClientInfo(clientId)
+	clientInfoLockT.RwMu.Lock()
+	kv.dataBaseMu.Lock()
+	defer clientInfoLockT.RwMu.Unlock()
+	defer kv.dataBaseMu.Unlock()
+	// increase the index of log
+	kv.currentIndex++
+	// check whether the id match to avoid twice excute
+	if clientInfoT.NextCommandId != commandId {
+		kv.checkSnapshot()
+		clientInfoLockT.Cond.Broadcast()
+		return
 	}
 	// commit the op to the state machine
 	switch op {
 	case GetOp:
 		value = kv.dataBase[key]
-		clientInfoT.lastReply = value
+		clientInfoT.LastReply = value
 	case PutOp:
 		kv.dataBase[key] = value
 	case AppendOp:
 		preValue := kv.dataBase[key]
 		kv.dataBase[key] = preValue + value
 	}
-	clientInfoT.nextCommandId++
-	clientInfoT.nextCommandSubmit = false
+	clientInfoT.NextCommandId++
+	kv.checkSnapshot()
 	// inform the waited RPC
-	clientInfoT.cond.Broadcast()
+	clientInfoLockT.Cond.Broadcast()
 }
 
 func (kv *KVServer) handleSnapshot(receiveMessage *raft.ApplyMsg) {
-
+	kv.dataBaseMu.Lock()
+	kv.mapMu.Lock()
+	kv.snapshotMu.Lock()
+	defer kv.dataBaseMu.Unlock()
+	defer kv.mapMu.Unlock()
+	defer kv.snapshotMu.Unlock()
+	r := bytes.NewBuffer(receiveMessage.Snapshot)
+	d := labgob.NewDecoder(r)
+	var databaseTemp map[string]string
+	var clientInfoMapTemp map[int32]*clientInfo
+	if d.Decode(&databaseTemp) != nil || d.Decode(&clientInfoMapTemp) != nil {
+		panic("Read Snapshot fails\n")
+	}
+	kv.currentIndex = receiveMessage.SnapshotIndex
+	kv.dataBase = databaseTemp
+	kv.clientInfoMap = clientInfoMapTemp
 }
 
 // servers[] contains the ports of the set of
@@ -274,7 +327,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv := new(KVServer)
 	kv.me = me
 	kv.maxraftstate = maxraftstate
-
+	kv.persister = persister
 	// You may need initialization code here.
 
 	kv.applyCh = make(chan raft.ApplyMsg)
@@ -282,6 +335,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	kv.dataBase = make(map[string]string)
 	kv.clientInfoMap = make(map[int32]*clientInfo)
+	kv.clientInfoLockMap = make(map[int32]*clientInfoLock)
 	// You may need initialization code here.
 	go kv.applyCheaker()
 	return kv

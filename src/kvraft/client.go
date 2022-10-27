@@ -10,7 +10,8 @@ import (
 	"6.824/labrpc"
 )
 
-var ClientId int32 = -1
+var clientId int32 = -1
+var waitTime time.Duration = time.Second / 3
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
@@ -40,7 +41,7 @@ func nrand() int64 {
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
-	ck.clientId = atomic.AddInt32(&ClientId, 1)
+	ck.clientId = atomic.AddInt32(&clientId, 1)
 	ck.commandId = -1
 	ck.leaderId = int(nrand()) % len(ck.servers)
 	// You'll have to add code here.
@@ -66,7 +67,7 @@ loop:
 			} else {
 				ck.ChangeLeaderIdUnVaild()
 			}
-		case <-time.After(time.Second / 2):
+		case <-time.After(waitTime):
 			// send another request if timeout
 			go ck.GetHandler(key, commandId, applyCh)
 			threadNums++
@@ -102,7 +103,7 @@ loop:
 			} else {
 				ck.ChangeLeaderIdUnVaild()
 			}
-		case <-time.After(time.Second / 2):
+		case <-time.After(waitTime):
 			// send another request if timeout
 			go ck.PutAppendHandler(key, value, op, commandId, applyCh)
 			threadNums++
@@ -139,7 +140,6 @@ loop:
 			break loop
 		case ErrWrongLeader:
 			leaderId = ck.ChangeLeaderId(leaderId)
-			time.Sleep(time.Microsecond * 100)
 		}
 	}
 }
@@ -165,7 +165,9 @@ loop:
 			break loop
 		case ErrWrongLeader:
 			leaderId = ck.ChangeLeaderId(leaderId)
-			time.Sleep(time.Microsecond * 100)
+		case ErrRepeat:
+			applych <- ConfirmEntry{}
+			break loop
 		}
 	}
 }
@@ -195,6 +197,7 @@ func (ck *Clerk) ChangeLeaderId(leaderId int) int {
 		leaderId = ck.leaderId
 	}
 	ck.leaderMu.Unlock()
+	time.Sleep(time.Second / 100)
 	return leaderId
 }
 

@@ -285,7 +285,12 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
 	rf.rwMu.Lock()
-	Debug(dClient, "S%d request Snapshot before baseLogIndex=%d\n", rf.me, rf.baseLogIndex)
+	Debug(dClient, "S%d request Snapshot before index=%d\n", rf.me, index)
+	if rf.lastIncludedIndex > index {
+		Debug(dClient, "S%d refuses Snapshot before index=%d because baseLogIndex = %d\n", rf.me, index, rf.baseLogIndex)
+		rf.rwMu.Unlock()
+		return
+	}
 	rf.lastIncludedIndexTemp = index
 	rf.lastIncludedTermTemp = rf.getTerm(index)
 	rf.logsTemp = rf.getLogs(index + 1)

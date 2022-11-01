@@ -41,8 +41,7 @@ type KVServer struct {
 	persister      *raft.Persister
 
 	// the kv database
-	dataBaseMu sync.Mutex
-	dataBase   map[string]string
+	dataBase map[string]string
 
 	// the info of each client
 	mapMu             sync.RWMutex
@@ -250,6 +249,8 @@ func (kv *KVServer) handleApplyLog(receiveMessage *raft.ApplyMsg) {
 	if receiveMessage.CommandIndex != kv.currentIndex+1 {
 		return
 	}
+	// increase the index of log
+	kv.currentIndex++
 	var operation Op = receiveMessage.Command.(Op)
 	// get the content
 	clientId := operation.ClientId
@@ -260,11 +261,7 @@ func (kv *KVServer) handleApplyLog(receiveMessage *raft.ApplyMsg) {
 	// DeBug(dInfo, "S%d receive apply clientId = %d commandId = %d key = %s op = %s value = %s\n", kv.me, clientId, commandId, key, op, value)
 	clientInfoT, clientInfoLockT := kv.GetClientInfo(clientId)
 	clientInfoLockT.RwMu.Lock()
-	kv.dataBaseMu.Lock()
 	defer clientInfoLockT.RwMu.Unlock()
-	defer kv.dataBaseMu.Unlock()
-	// increase the index of log
-	kv.currentIndex++
 	// check whether the id match to avoid twice excute
 	if clientInfoT.NextCommandId != commandId {
 		kv.checkSnapshot()
@@ -289,10 +286,8 @@ func (kv *KVServer) handleApplyLog(receiveMessage *raft.ApplyMsg) {
 }
 
 func (kv *KVServer) handleSnapshot(receiveMessage *raft.ApplyMsg) {
-	kv.dataBaseMu.Lock()
 	kv.mapMu.Lock()
 	kv.snapshotMu.Lock()
-	defer kv.dataBaseMu.Unlock()
 	defer kv.mapMu.Unlock()
 	defer kv.snapshotMu.Unlock()
 	r := bytes.NewBuffer(receiveMessage.Snapshot)

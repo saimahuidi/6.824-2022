@@ -29,45 +29,67 @@ type Config struct {
 }
 
 const (
-	OK = "OK"
+	OK = iota
+	ErrWrongLeader
+	WaitForClientId
 )
 
-type Err string
+const (
+	GetClientId = iota
+	Query
+	Join
+	Leave
+	Move
+)
+
+type Err int
 
 type JoinArgs struct {
-	Servers map[int][]string // new GID -> servers mappings
+	Servers   map[int][]string // new GID -> servers mappings
+	ClientId  int32
+	CommandId int32
 }
 
 type JoinReply struct {
-	WrongLeader bool
-	Err         Err
+	Err Err
 }
 
 type LeaveArgs struct {
-	GIDs []int
+	GIDs      []int
+	ClientId  int32
+	CommandId int32
 }
 
 type LeaveReply struct {
-	WrongLeader bool
-	Err         Err
+	Err Err
 }
 
 type MoveArgs struct {
-	Shard int
-	GID   int
+	Shard     int
+	GID       int
+	ClientId  int32
+	CommandId int32
 }
 
 type MoveReply struct {
-	WrongLeader bool
-	Err         Err
+	Err Err
 }
 
 type QueryArgs struct {
-	Num int // desired config number
+	Num       int // desired config number
+	ClientId  int32
+	CommandId int32
 }
 
 type QueryReply struct {
-	WrongLeader bool
-	Err         Err
-	Config      Config
+	Err    Err
+	Config Config
+}
+
+type GetClientIdArgs struct {
+}
+
+type GetClientIdReply struct {
+	Err      Err
+	ClientId int32
 }

@@ -112,7 +112,11 @@ loop:
 	go ck.WaitForThreads(threadNums, applyCh)
 }
 
-func (ck *Clerk) GetHandler(key string, commandId int32, applych chan ConfirmEntry) {
+func (ck *Clerk) 			if receive == nil {
+	kv.changeLeaderId()
+	go kv.sendShardSender(&args, applyCh, &bagBackUp)
+	continue
+}GetHandler(key string, commandId int32, applych chan ConfirmEntry) {
 	args := GetArgs{key, ck.clientId, commandId}
 	ck.leaderMu.RLock()
 	leaderId := ck.leaderId

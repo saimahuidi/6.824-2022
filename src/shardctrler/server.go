@@ -367,7 +367,6 @@ func (sc *ShardCtrler) applyCheaker() {
 		if receiveMessage.CommandValid && !receiveMessage.SnapshotValid {
 			// DeBug(dInfo, "S%d receive apply log %v\n", sc.me, receiveMessage.Command)
 			sc.handleApplyLog(&receiveMessage)
-			sc.receiveLogSize += int(unsafe.Sizeof(receiveMessage))
 		} else if receiveMessage.SnapshotValid && !receiveMessage.CommandValid {
 			sc.handleSnapshot(&receiveMessage)
 		} else {
@@ -395,9 +394,8 @@ func (sc *ShardCtrler) handleApplyLog(receiveMessage *raft.ApplyMsg) {
 	case Move:
 		sc.moveHandler(&operation)
 	}
-	// if _, isLeader := sc.rf.GetState(); isLeader {
-	// 	log.Printf("%v\n", sc.configs[len(sc.configs)-1].Groups)
-	// }
+	sc.receiveLogSize += int(unsafe.Sizeof(receiveMessage))
+	sc.checkSnapshot()
 }
 
 func (sc *ShardCtrler) handleSnapshot(receiveMessage *raft.ApplyMsg) {
@@ -454,7 +452,6 @@ func (sc *ShardCtrler) queryHandler(operation *Op) {
 	defer clientInfoLockT.RwMu.Unlock()
 	// check whether the id match to avoid twice excute
 	if clientInfoT.NextCommandId != commandId {
-		sc.checkSnapshot()
 		clientInfoLockT.Cond.Broadcast()
 		return
 	}
@@ -465,7 +462,6 @@ func (sc *ShardCtrler) queryHandler(operation *Op) {
 	} else {
 		clientInfoT.LastReply = sc.configs[num]
 	}
-	sc.checkSnapshot()
 	// inform the waited RPC
 	clientInfoLockT.Cond.Broadcast()
 }
@@ -480,7 +476,6 @@ func (sc *ShardCtrler) joinHandler(operation *Op) {
 	defer clientInfoLockT.RwMu.Unlock()
 	// check whether the id match to avoid twice excute
 	if clientInfoT.NextCommandId != commandId {
-		sc.checkSnapshot()
 		clientInfoLockT.Cond.Broadcast()
 		return
 	}
@@ -516,7 +511,6 @@ func (sc *ShardCtrler) joinHandler(operation *Op) {
 	}
 	sc.loadBalance(freeShardsList)
 	// operation over
-	sc.checkSnapshot()
 	// inform the waited RPC
 	clientInfoLockT.Cond.Broadcast()
 }
@@ -532,7 +526,6 @@ func (sc *ShardCtrler) moveHandler(operation *Op) {
 	defer clientInfoLockT.RwMu.Unlock()
 	// check whether the id match to avoid twice excute
 	if clientInfoT.NextCommandId != commandId {
-		sc.checkSnapshot()
 		clientInfoLockT.Cond.Broadcast()
 		return
 	}
@@ -543,7 +536,6 @@ func (sc *ShardCtrler) moveHandler(operation *Op) {
 	curConfig.Shards[shard] = GID
 	sc.redistributShard(GID, oldGID, shard)
 	// over
-	sc.checkSnapshot()
 	// inform the waited RPC
 	clientInfoLockT.Cond.Broadcast()
 }
@@ -558,7 +550,6 @@ func (sc *ShardCtrler) leaveHandler(operation *Op) {
 	defer clientInfoLockT.RwMu.Unlock()
 	// check whether the id match to avoid twice excute
 	if clientInfoT.NextCommandId != commandId {
-		sc.checkSnapshot()
 		clientInfoLockT.Cond.Broadcast()
 		return
 	}
@@ -584,7 +575,6 @@ func (sc *ShardCtrler) leaveHandler(operation *Op) {
 		freeShardsList := sc.removeAndGetFreeShards(removeSet)
 		sc.loadBalance(freeShardsList)
 	}
-	sc.checkSnapshot()
 	// inform the waited RPC
 	clientInfoLockT.Cond.Broadcast()
 }

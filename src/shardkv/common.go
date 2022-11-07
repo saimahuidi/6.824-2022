@@ -1,5 +1,12 @@
 package shardkv
 
+import (
+	"log"
+	"sync"
+
+	"6.824/shardctrler"
+)
+
 //
 // Sharded key/value server.
 // Lots of replica groups, each running Raft.
@@ -10,23 +17,38 @@ package shardkv
 //
 
 const (
-	OK             = "OK"
-	ErrNoKey       = "ErrNoKey"
-	ErrWrongGroup  = "ErrWrongGroup"
-	ErrWrongLeader = "ErrWrongLeader"
+	OK = iota
+	ErrNoKey
+	ErrWrongGroup
+	ErrWrongLeader
+	ErrConfigNum
+	ErrRepeat
+	ErrWaitingForReconfig
+	ErrStaleConfig
 )
 
-type Err string
+const (
+	GetOp = iota
+	PutOp
+	AppendOp
+	PutAppendOp
+	UpdateConfigOp
+	MigrateInstallOp
+	MigrateConfirmOp
+	DeleteSendingDatabaseOp
+)
+
+type Err int
 
 // Put or Append
 type PutAppendArgs struct {
 	// You'll have to add definitions here.
-	Key   string
-	Value string
-	Op    string // "Put" or "Append"
-	// You'll have to add definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
+	Key       string
+	Shard     int
+	Value     string
+	Op        int // "Put" or "Append"
+	ClientId  int32
+	CommandId int32
 }
 
 type PutAppendReply struct {
@@ -34,11 +56,52 @@ type PutAppendReply struct {
 }
 
 type GetArgs struct {
-	Key string
-	// You'll have to add definitions here.
+	Key       string
+	Shard     int
+	ClientId  int32
+	CommandId int32
 }
 
 type GetReply struct {
 	Err   Err
 	Value string
+}
+
+type UpdateConfigArgs struct {
+	NewConfig shardctrler.Config
+}
+
+type MigrateInstallArgs struct {
+	ConfigNum     int
+	Shard         int
+	DataBaseShard map[string]string
+}
+
+type MigrateInstallReply struct {
+	Err Err
+}
+
+type DeleteSendingDatabaseOpArgs struct {
+	ShardNum  int
+	ConfigNum int
+}
+
+func assert(content bool, format string, a ...interface{}) {
+	if !content {
+		log.Printf(format, a...)
+		panic("")
+	}
+}
+
+type ReadMapCondition struct {
+	rwMu *sync.RWMutex
+}
+
+// to make a read lock for cond
+func (rM *ReadMapCondition) Lock() {
+	rM.rwMu.RLock()
+}
+
+func (rM *ReadMapCondition) Unlock() {
+	rM.rwMu.RUnlock()
 }

@@ -74,6 +74,7 @@ type Op struct {
 type clientInfo struct {
 	NextCommandId int32
 	LastReply     string
+	ConfigNum     int
 }
 
 // used to seriablize every client's command
@@ -120,7 +121,7 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 		reply.Err = ErrWrongLeader
 		return
 	}
-	Debug(dGroup, "G%d receive Get ClientId = %d CommandId = %d Key = %s shard = %d\n", kv.gid, args.ClientId, args.CommandId, args.Key, args.Shard)
+	Debug(dGroup, "G%d receive Get ClientId = %d CommandId = %d Key = %s shard = %d config = %d\n", kv.gid, args.ClientId, args.CommandId, args.Key, args.Shard, args.ConfigNum)
 
 	clientId := args.ClientId
 	commandId := args.CommandId
@@ -143,14 +144,21 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	// check whether the server is reponsible for the shard
 	kv.configLock.RLock()
 	kv.dataBaseLock.RLock()
-	if kv.config.Shards[args.Shard] != kv.gid {
+	configNum := kv.config.Num
+	if configNum < args.ConfigNum {
+		kv.configLock.RUnlock()
+		kv.dataBaseLock.RUnlock()
+		clientInfoLockT.RwMu.Unlock()
+		reply.Err = ErrWaitingForReconfig
+		return
+	}
+	if configNum > args.ConfigNum {
 		kv.configLock.RUnlock()
 		kv.dataBaseLock.RUnlock()
 		clientInfoLockT.RwMu.Unlock()
 		reply.Err = ErrWrongGroup
 		return
 	}
-	configNum := kv.config.Num
 	// check the database to see whether the shard has finished
 	if _, ok := kv.dataBase[args.Shard]; !ok {
 		kv.configLock.RUnlock()
@@ -160,12 +168,13 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 		return
 	}
 	assert(kv.config.Shards[args.Shard] == kv.gid, "Wrong group\n")
-	kv.configLock.RUnlock()
-	kv.dataBaseLock.RUnlock()
 
 	operation := Op{GetOp, configNum, *args}
 	kv.rf.Start(operation)
+	clientInfoT.ConfigNum = configNum
 	Debug(dLeader, "G%d start %v\n", kv.gid, operation)
+	kv.configLock.RUnlock()
+	kv.dataBaseLock.RUnlock()
 	clientInfoLockT.RwMu.Unlock()
 	// wait for the apply
 	clientInfoLockT.Cond.L.Lock()
@@ -180,13 +189,10 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 			}
 			return
 		}
-		kv.configLock.RLock()
-		if configNum != kv.config.Num {
-			kv.configLock.RUnlock()
+		if configNum != clientInfoT.ConfigNum {
 			reply.Err = ErrWrongGroup
 			return
 		}
-		kv.configLock.RUnlock()
 		clientInfoLockT.Cond.Wait()
 	}
 }
@@ -197,7 +203,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		reply.Err = ErrWrongLeader
 		return
 	}
-	Debug(dGroup, "G%d receive Get ClientId = %d CommandId = %d Key = %s shard = %d\n", kv.gid, args.ClientId, args.CommandId, args.Key, args.Shard)
+	Debug(dGroup, "G%d receive PutAppend ClientId = %d CommandId = %d Key = %s shard = %d config = %d\n", kv.gid, args.ClientId, args.CommandId, args.Key, args.Shard, args.ConfigNum)
 
 	clientId := args.ClientId
 	commandId := args.CommandId
@@ -219,14 +225,21 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// check whether the server is reponsible for the shard
 	kv.configLock.RLock()
 	kv.dataBaseLock.RLock()
-	if kv.config.Shards[args.Shard] != kv.gid {
+	configNum := kv.config.Num
+	if configNum < args.ConfigNum {
+		kv.configLock.RUnlock()
+		kv.dataBaseLock.RUnlock()
+		clientInfoLockT.RwMu.Unlock()
+		reply.Err = ErrWaitingForReconfig
+		return
+	}
+	if configNum > args.ConfigNum {
 		kv.configLock.RUnlock()
 		kv.dataBaseLock.RUnlock()
 		clientInfoLockT.RwMu.Unlock()
 		reply.Err = ErrWrongGroup
 		return
 	}
-	configNum := kv.config.Num
 	// check the database to see whether the shard has finished
 	if _, ok := kv.dataBase[args.Shard]; !ok {
 		kv.configLock.RUnlock()
@@ -241,6 +254,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 	operation := Op{PutAppendOp, configNum, *args}
 	kv.rf.Start(operation)
+	clientInfoT.ConfigNum = configNum
 	Debug(dLeader, "G%d start %v\n", kv.gid, operation)
 	clientInfoLockT.RwMu.Unlock()
 	// wait for the apply
@@ -255,13 +269,10 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 			}
 			return
 		}
-		kv.configLock.RLock()
-		if configNum != kv.config.Num {
-			kv.configLock.RUnlock()
+		if configNum != clientInfoT.ConfigNum {
 			reply.Err = ErrWrongGroup
 			return
 		}
-		kv.configLock.RUnlock()
 		clientInfoLockT.Cond.Wait()
 	}
 }
@@ -480,8 +491,9 @@ func (kv *ShardKV) getHandler(operation *Op) {
 		clientInfoT.NextCommandId = commandId
 	}
 	//check command vaild
-	if ok := kv.checkCommandVaild(configNum, commandId, clientInfoT.NextCommandId, clientInfoLockT); !ok {
+	if ok := kv.checkCommandVaild(configNum, commandId, clientInfoT.NextCommandId, clientInfoT); !ok {
 		clientInfoLockT.RwMu.Unlock()
+		clientInfoLockT.Cond.Broadcast()
 		return
 	}
 	// do corresponding operation
@@ -491,8 +503,8 @@ func (kv *ShardKV) getHandler(operation *Op) {
 	clientInfoT.NextCommandId++
 	kv.dataBaseLock.RUnlock()
 	// inform the waited RPC
-	clientInfoLockT.Cond.Broadcast()
 	clientInfoLockT.RwMu.Unlock()
+	clientInfoLockT.Cond.Broadcast()
 }
 
 func (kv *ShardKV) putAppendHandler(operation *Op) {
@@ -508,8 +520,9 @@ func (kv *ShardKV) putAppendHandler(operation *Op) {
 		clientInfoT.NextCommandId = commandId
 	}
 	//check command vaild
-	if ok := kv.checkCommandVaild(configNum, commandId, clientInfoT.NextCommandId, clientInfoLockT); !ok {
+	if ok := kv.checkCommandVaild(configNum, commandId, clientInfoT.NextCommandId, clientInfoT); !ok {
 		clientInfoLockT.RwMu.Unlock()
+		clientInfoLockT.Cond.Broadcast()
 		return
 	}
 	// do corresponding operation
@@ -526,8 +539,8 @@ func (kv *ShardKV) putAppendHandler(operation *Op) {
 	clientInfoT.NextCommandId++
 	kv.dataBaseLock.Unlock()
 	// inform the waited RPC
-	clientInfoLockT.Cond.Broadcast()
 	clientInfoLockT.RwMu.Unlock()
+	clientInfoLockT.Cond.Broadcast()
 }
 
 func (kv *ShardKV) updateConfigHandler(operation *Op) {
@@ -625,24 +638,23 @@ func (kv *ShardKV) DeleteSendingDatabaseHandler(operation *Op) {
 	kv.sendingDataBaseLock.Unlock()
 }
 
-func (kv *ShardKV) checkCommandVaild(configNum int, commandId int32, nextCommandId int32, clientInfoLockT *clientInfoLock) bool {
+func (kv *ShardKV) checkCommandVaild(configNum int, commandId int32, nextCommandId int32, clientInfoT *clientInfo) bool {
 	// check wether the config Num match the current config Num to avoid twice excute
-	if ok := kv.handlerCheckConfigNum(configNum, clientInfoLockT); !ok {
-		clientInfoLockT.Cond.Broadcast()
+	if ok := kv.handlerCheckConfigNum(configNum, clientInfoT); !ok {
 		return false
 	}
 	// check whether the id matches the clientId to avoid twice excute
 	if nextCommandId != commandId {
-		clientInfoLockT.Cond.Broadcast()
 		return false
 	}
 	return true
 }
 
-func (kv *ShardKV) handlerCheckConfigNum(configNum int, clientInfoLockT *clientInfoLock) bool {
+func (kv *ShardKV) handlerCheckConfigNum(configNum int, clientInfoT *clientInfo) bool {
 	kv.configLock.RLock()
 	if configNum != kv.config.Num {
 		kv.configLock.RUnlock()
+		clientInfoT.ConfigNum = kv.config.Num
 		return false
 	}
 	kv.configLock.RUnlock()

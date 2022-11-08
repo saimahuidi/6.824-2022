@@ -915,6 +915,24 @@ func (rf *Raft) applyChecker() {
 		}
 	}
 }
+func (rf *Raft) applyPrelog() {
+	rf.rwMu.Lock()
+	if rf.lastApplied < rf.commitIndex {
+		applyMsgs := make([]ApplyMsg, 0)
+		for i := rf.lastApplied + 1; i <= rf.commitIndex; i++ {
+			applyMsgs = append(applyMsgs, ApplyMsg{true, rf.getCommand(i), i, false, nil, -1, -1})
+		}
+		Debug(dClient, "S%d apply logEntry from index=%d to index=%d\n", rf.me, rf.lastApplied+1, rf.commitIndex)
+		rf.lastApplied = rf.commitIndex
+		rf.rwMu.Unlock()
+		for i := 0; i < len(applyMsgs); i++ {
+			Debug(dClient, "S%d is applying command %v\n", rf.me, applyMsgs[i].Command)
+			rf.applych <- applyMsgs[i]
+		}
+	} else {
+		rf.rwMu.Unlock()
+	}
+}
 
 func (rf *Raft) commitChecker() {
 	commitTimeout := time.Millisecond * 10
@@ -999,6 +1017,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 	rf.PassSnapshot(rf.persister.ReadSnapshot())
+	rf.applyPrelog()
 	// start ticker goroutine to start elections
 	rf.timeStart = time.Now()
 	go rf.ticker()

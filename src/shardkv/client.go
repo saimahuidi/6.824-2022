@@ -81,7 +81,7 @@ func (ck *Clerk) Get(key string) string {
 	ck.commandId++
 	shard := key2shard(key)
 	Debug(dClient, "C%d commandId = %d request Get key = %s shard = %d\n", ck.clientId, ck.commandId, key, shard)
-	args := &GetArgs{key, shard, ck.clientId, ck.commandId}
+	args := &GetArgs{key, shard, ck.clientId, ck.commandId, ck.config.Num}
 	applyCh := make(chan *replyStruct[GetReply])
 	// get the servers
 	servers := ck.getServers(shard)
@@ -99,7 +99,7 @@ loop:
 				continue
 			}
 			// if the RPC is invaild
-			if ck.getHandler(receive, &ret, &servers, shard) {
+			if ck.getHandler(args, receive, &ret, &servers, shard) {
 				threadNums--
 				break loop
 			} else {
@@ -117,7 +117,7 @@ loop:
 	return ret
 }
 
-func (ck *Clerk) getHandler(receive *replyStruct[GetReply], ret *string, servers *[]string, shard int) bool {
+func (ck *Clerk) getHandler(args *GetArgs, receive *replyStruct[GetReply], ret *string, servers *[]string, shard int) bool {
 	switch receive.reply.Err {
 	case OK:
 		*ret = receive.reply.Value
@@ -128,6 +128,7 @@ func (ck *Clerk) getHandler(receive *replyStruct[GetReply], ret *string, servers
 	case ErrWrongGroup:
 		ck.config = ck.sm.Query(-1)
 		*servers = ck.config.Groups[ck.config.Shards[shard]]
+		args.ConfigNum = ck.config.Num
 		return false
 	case ErrWaitingForReconfig:
 		time.Sleep(waitInstall)
@@ -145,7 +146,7 @@ func (ck *Clerk) PutAppend(key string, value string, op int) {
 	ck.commandId++
 	shard := key2shard(key)
 	Debug(dClient, "C%d commandId = %d request %d key = %s value = %s shard = %d\n", ck.clientId, ck.commandId, op, key, value, shard)
-	args := &PutAppendArgs{key, shard, value, op, ck.clientId, ck.commandId}
+	args := &PutAppendArgs{key, shard, value, op, ck.clientId, ck.commandId, ck.config.Num}
 	applyCh := make(chan *replyStruct[PutAppendReply])
 	// get the servers
 	servers := ck.getServers(shard)
@@ -163,7 +164,7 @@ loop:
 				continue
 			}
 			// if the RPC is invaild
-			if ck.putAppendHandler(receive, &ret, &servers, shard) {
+			if ck.putAppendHandler(args, receive, &ret, &servers, shard) {
 				threadNums--
 				break loop
 			} else {
@@ -180,7 +181,7 @@ loop:
 	go WaitForThreads(threadNums, applyCh)
 }
 
-func (ck *Clerk) putAppendHandler(receive *replyStruct[PutAppendReply], ret *string, servers *[]string, shard int) bool {
+func (ck *Clerk) putAppendHandler(args *PutAppendArgs, receive *replyStruct[PutAppendReply], ret *string, servers *[]string, shard int) bool {
 	switch receive.reply.Err {
 	case OK:
 		return true
@@ -190,6 +191,7 @@ func (ck *Clerk) putAppendHandler(receive *replyStruct[PutAppendReply], ret *str
 	case ErrWrongGroup:
 		ck.config = ck.sm.Query(-1)
 		*servers = ck.config.Groups[ck.config.Shards[shard]]
+		args.ConfigNum = ck.config.Num
 		return false
 	case ErrWaitingForReconfig:
 		time.Sleep(waitInstall)

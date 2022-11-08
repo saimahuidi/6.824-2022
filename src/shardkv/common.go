@@ -16,7 +16,7 @@ import (
 // You will have to modify these definitions.
 //
 
-const threadMaxNum = 5
+const threadMaxNum = 1
 
 const (
 	OK = iota
@@ -51,6 +51,7 @@ type PutAppendArgs struct {
 	Op        int // "Put" or "Append"
 	ClientId  int32
 	CommandId int32
+	ConfigNum int
 }
 
 type PutAppendReply struct {
@@ -62,6 +63,7 @@ type GetArgs struct {
 	Shard     int
 	ClientId  int32
 	CommandId int32
+	ConfigNum int
 }
 
 type GetReply struct {

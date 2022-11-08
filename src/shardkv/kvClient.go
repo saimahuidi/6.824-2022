@@ -26,8 +26,10 @@ loop:
 		case <-time.After(waitTimeReSend):
 			// send another request if timeout
 			// to avoid data race
-			go kv.sendShardSender(&args, applyCh, &bagBackUp)
-			threadNums++
+			if threadNums < threadMaxNum {
+				go kv.sendShardSender(&args, applyCh, &bagBackUp)
+				threadNums++
+			}
 		}
 	}
 	go WaitForThreads(threadNums, applyCh)

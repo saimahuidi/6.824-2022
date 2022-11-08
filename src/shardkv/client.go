@@ -107,8 +107,10 @@ loop:
 			}
 		case <-time.After(waitTimeReSend):
 			// send another request if timeout
-			go rpcSender(ck, args, applyCh, "ShardKV.Get", shard, servers)
-			threadNums++
+			if threadNums < threadMaxNum {
+				go rpcSender(ck, args, applyCh, "ShardKV.Get", shard, servers)
+				threadNums++
+			}
 		}
 	}
 	go WaitForThreads(threadNums, applyCh)
@@ -169,8 +171,10 @@ loop:
 			}
 		case <-time.After(waitTimeReSend):
 			// send another request if timeout
-			go rpcSender(ck, args, applyCh, "ShardKV.PutAppend", shard, servers)
-			threadNums++
+			if threadNums < threadMaxNum {
+				go rpcSender(ck, args, applyCh, "ShardKV.PutAppend", shard, servers)
+				threadNums++
+			}
 		}
 	}
 	go WaitForThreads(threadNums, applyCh)

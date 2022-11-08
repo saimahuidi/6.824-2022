@@ -16,6 +16,8 @@ import (
 // You will have to modify these definitions.
 //
 
+const threadMaxNum = 5
+
 const (
 	OK = iota
 	ErrNoKey
